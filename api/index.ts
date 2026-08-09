@@ -89,12 +89,43 @@ app.get("/settings", async (req, res) => {
   }
 });
 
+const settingsValidators = {
+  device_name: v => typeof v === 'string',
+  wake_word: v => typeof v === 'string',
+  language: v => typeof v === 'string',
+  speech_mode: v => typeof v === 'string',
+  danger_sensitivity: v => typeof v === 'string',
+  button_press_behavior: v => typeof v === 'string',
+  haptic_pattern: v => typeof v === 'string',
+  home_location: v => v === null || typeof v === 'string',
+  volume: v => typeof v === 'number' && v >= 0 && v <= 100,
+  auto_distress_timeout: v => typeof v === 'number' && v >= 0,
+  fetch_interval: v => typeof v === 'number' && v >= 0,
+  notify_companion: v => typeof v === 'boolean',
+  location_sharing_enabled: v => typeof v === 'boolean',
+  vibration_enabled: v => typeof v === 'boolean',
+  high_contrast_mode: v => typeof v === 'boolean',
+  alert_types_enabled: v => Array.isArray(v) && v.every(t => typeof t === 'string'),
+  emergency_contacts: v => Array.isArray(v),
+};
+
 app.post("/settings", async (req, res) => {
   try {
-    const { device_id, ...settings } = req.body;
+    // unique_device_id and last_updated are server-managed, ignore echoes from GET
+    const { device_id, unique_device_id, last_updated, ...settings } = req.body;
 
     if (!device_id) {
       return res.status(400).json({ error: 'device_id is required' });
+    }
+
+    for (const [field, value] of Object.entries(settings)) {
+      const validator = settingsValidators[field];
+      if (!validator) {
+        return res.status(400).json({ error: `Unknown field: ${field}` });
+      }
+      if (!validator(value)) {
+        return res.status(400).json({ error: `Invalid value for field: ${field}` });
+      }
     }
 
     // Update settings in Supabase
