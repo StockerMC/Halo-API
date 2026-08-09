@@ -152,8 +152,6 @@ app.post("/settings", async (req, res) => {
   }
 });
 
-// TODO: Save sent notifications to supabase
-
 // Partial Push Notification
 async function sendPartialNotification(token, data) {
   return admin.messaging().send({
@@ -176,27 +174,110 @@ app.post("/notifications", async (req, res) => {
     const data = req.body;
     console.log(data);
 
+    // Persist before delivery so an alert is never lost to a missing token
+    // Firmware payload maps to alerts columns: alert_type -> type, severity -> priority
+    const { error: insertError } = await supabase
+      .from('alerts')
+      .insert({
+        device_id: data.device_id || 'companion_app',
+        type: alertTypes.includes(data.alert_type) ? data.alert_type : 'help',
+        message: data.message,
+        location: data.location,
+        priority: alertPriorities.includes(data.severity) ? data.severity : 'medium',
+        status: 'active',
+        timestamp: new Date().toISOString(),
+      });
+
+    if (insertError) {
+      console.error('Error saving alert to Supabase:', insertError);
+    }
+
     const { data: tokenData, error } = await supabase
       .from('tokens')
       .select('fcm_token')
       .eq('unique_device_id', 'companion_app')
       .single();
-    
-    if (error || !tokenData) {
+
+    const token = tokenData && tokenData.fcm_token;
+    if (error || !token) {
       console.error('Error fetching token from Supabase:', error);
-      return res.status(404).json({ error: "FCM token not found" });
+      return res.status(404).json({ error: "FCM token not found", alert_saved: !insertError });
     }
-    
-    const token = tokenData.fcm_token;
-    if (!token) {
-      return res.status(400).json({ error: "FCM token not found" });
-    }
-    
+
     await sendPartialNotification(token, data);
-    res.json({status: "OK"});
+    res.json({ status: "OK", alert_saved: !insertError });
   } catch (error) {
     console.error('Error sending notification:', error);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+const alertStatuses = ['active', 'acknowledged', 'resolved'];
+const alertTypes = ['help', 'fall', 'sos', 'emergency'];
+const alertPriorities = ['low', 'medium', 'high', 'critical'];
+
+app.get("/alerts", async (req, res) => {
+  try {
+    const { device_id, status } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+
+    if (status && !alertStatuses.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${alertStatuses.join(', ')}` });
+    }
+
+    let query = supabase
+      .from('alerts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (device_id) query = query.eq('device_id', device_id);
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error fetching alerts:', error);
+      return res.status(500).json({ error: 'Failed to fetch alerts' });
+    }
+
+    return res.json(data);
+
+  } catch (error) {
+    console.error('API Error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.patch("/alerts/:id", async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    if (!alertStatuses.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${alertStatuses.join(', ')}` });
+    }
+
+    const { data, error } = await supabase
+      .from('alerts')
+      .update({ status })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Error updating alert:', error);
+      return res.status(500).json({ error: 'Failed to update alert' });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Alert not found' });
+    }
+
+    return res.json(data);
+
+  } catch (error) {
+    console.error('API Error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
