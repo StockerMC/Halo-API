@@ -21,7 +21,13 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey)
 
-const serviceAccount = require("../serviceAccountKey.json");
+const serviceAccountPath = path.join(__dirname, "../serviceAccountKey.json");
+
+if (!fs.existsSync(serviceAccountPath)) {
+  throw new Error("serviceAccountKey.json not found in project root - download it from the Firebase console (Project settings > Service accounts)");
+}
+
+const serviceAccount = require(serviceAccountPath);
 
 // Initialize Firebase
 admin.initializeApp({
